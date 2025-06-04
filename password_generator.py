@@ -5,11 +5,13 @@ import string
 import sys
 from datetime import datetime
 from pathlib import Path
+import io
+import qrcode
 import pyperclip
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                             QLabel, QCheckBox, QSpinBox, QLineEdit, QPushButton,
                             QMessageBox, QInputDialog, QGraphicsDropShadowEffect,
-                            QGroupBox, QShortcut)
+                            QGroupBox, QShortcut, QDialog)
 from PyQt5.QtCore import Qt  # Removida a importação do QKeySequence daqui
 from PyQt5.QtGui import QIcon, QPixmap, QColor, QFont, QKeySequence
 from openpyxl import Workbook, load_workbook
@@ -143,12 +145,19 @@ class PasswordGenerator(QMainWindow):
         self.password_field.setReadOnly(True)
         layout.addWidget(password_label)
         layout.addWidget(self.password_field)
+
+        self.strength_label = QLabel()
+        layout.addWidget(self.strength_label)
+        self.password_field.textChanged.connect(self.update_password_field)
         
         # Botões
         button_layout = QHBoxLayout()
         self.generate_btn = QPushButton(u"Gerar Senha")
+        self.passphrase_btn = QPushButton(u"Passphrase")
         self.save_excel_btn = QPushButton(u"Salvar na Planilha")
         self.copy_btn = QPushButton(u"Copiar")
+        self.qr_btn = QPushButton(u"QR Code")
+        self.search_btn = QPushButton(u"Pesquisar")
         
         # Estilização moderna dos botões
         button_style = """
@@ -194,17 +203,51 @@ class PasswordGenerator(QMainWindow):
         
         self.copy_btn.setStyleSheet(button_style + """
             QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
                                           stop:0 #2ECC71, stop:1 #27AE60);
             }
             QPushButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
                                           stop:0 #27AE60, stop:1 #2ECC71);
+            }
+        """)
+
+        self.passphrase_btn.setStyleSheet(button_style + """
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                                          stop:0 #9B59B6, stop:1 #8E44AD);
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                                          stop:0 #8E44AD, stop:1 #9B59B6);
+            }
+        """)
+
+        self.qr_btn.setStyleSheet(button_style + """
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                                          stop:0 #F1C40F, stop:1 #F39C12);
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                                          stop:0 #F39C12, stop:1 #F1C40F);
+            }
+        """)
+
+        self.search_btn.setStyleSheet(button_style + """
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                                          stop:0 #1ABC9C, stop:1 #16A085);
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                                          stop:0 #16A085, stop:1 #1ABC9C);
             }
         """)
         
         # Adiciona sombra aos botões
-        for btn in [self.generate_btn, self.save_excel_btn, self.copy_btn]:
+        for btn in [self.generate_btn, self.passphrase_btn, self.save_excel_btn,
+                    self.copy_btn, self.qr_btn, self.search_btn]:
             effect = QGraphicsDropShadowEffect(self)
             effect.setBlurRadius(10)
             effect.setOffset(0, 3)
@@ -213,16 +256,25 @@ class PasswordGenerator(QMainWindow):
         
         # Conectando os botões às funções
         self.generate_btn.clicked.connect(self.generate_password)
+        self.passphrase_btn.clicked.connect(self.generate_passphrase)
         self.save_excel_btn.clicked.connect(self.save_to_excel)
         self.copy_btn.clicked.connect(self.copy_password)
+        self.qr_btn.clicked.connect(self.show_qr_code)
+        self.search_btn.clicked.connect(self.search_history)
         
         # Adiciona espaçamento entre os botões
         button_layout.addStretch()
         button_layout.addWidget(self.generate_btn)
         button_layout.addSpacing(15)
+        button_layout.addWidget(self.passphrase_btn)
+        button_layout.addSpacing(15)
         button_layout.addWidget(self.save_excel_btn)
         button_layout.addSpacing(15)
         button_layout.addWidget(self.copy_btn)
+        button_layout.addSpacing(15)
+        button_layout.addWidget(self.qr_btn)
+        button_layout.addSpacing(15)
+        button_layout.addWidget(self.search_btn)
         button_layout.addSpacing(15)
         
         # Botão de limpar registros antigos
@@ -281,9 +333,11 @@ class PasswordGenerator(QMainWindow):
 
         # Atalhos de teclado
         QShortcut(QKeySequence("Ctrl+G"), self, self.generate_password)
+        QShortcut(QKeySequence("Ctrl+P"), self, self.generate_passphrase)
         QShortcut(QKeySequence("Ctrl+S"), self, self.save_to_excel)
         QShortcut(QKeySequence("Ctrl+C"), self, self.copy_password)
         QShortcut(QKeySequence("Ctrl+H"), self, self.show_history)
+        QShortcut(QKeySequence("Ctrl+F"), self, self.search_history)
 
     def generate_password(self):
         """Gera uma nova senha com base nas opções selecionadas"""
@@ -320,12 +374,31 @@ class PasswordGenerator(QMainWindow):
             if self.password_field.text():
                 self.password_history.append({
                     'senha': self.password_field.text(),
-                    'data': datetime.now().strftime("%H:%M:%S"),
+                    'timestamp': datetime.now(),
                     'comprimento': self.length_spin.value()
                 })
             
         except Exception as e:
             QMessageBox.critical(self, "Erro", f"Erro ao gerar senha: {str(e)}")
+
+    def generate_passphrase(self):
+        """Gera uma passphrase simples baseada em palavras"""
+        WORDS = [
+            "alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf",
+            "hotel", "india", "juliet", "kilo", "lima", "mike", "november",
+            "oscar", "papa", "quebec", "romeo", "sierra", "tango", "uniform",
+            "victor", "whiskey", "xray", "yankee", "zulu"
+        ]
+        count = self.length_spin.value()
+        phrase = ' '.join(random.choice(WORDS) for _ in range(count))
+        self.password_field.setText(phrase)
+
+        if self.password_field.text():
+            self.password_history.append({
+                'senha': self.password_field.text(),
+                'timestamp': datetime.now(),
+                'comprimento': len(self.password_field.text())
+            })
 
     def save_password(self):
         """Salva a senha gerada em um arquivo com detalhes"""
@@ -569,9 +642,69 @@ CONFIGURAÇÕES UTILIZADAS:
             
         history_text = "Senhas geradas nesta sessão:\n\n"
         for entry in reversed(self.password_history[-10:]):  # últimas 10 senhas
-            history_text += f"[{entry['data']}] {entry['senha']} ({entry['comprimento']} caracteres)\n"
+            time_str = entry['timestamp'].strftime("%H:%M:%S")
+            history_text += f"[{time_str}] {entry['senha']} ({entry['comprimento']} caracteres)\n"
             
         QMessageBox.information(self, "Histórico", history_text)
+
+    def search_history(self):
+        """Permite buscar senhas no histórico"""
+        if not self.password_history:
+            QMessageBox.information(self, "Histórico", "Nenhuma senha foi gerada ainda.")
+            return
+
+        option, ok = QInputDialog.getItem(
+            self,
+            "Pesquisar Histórico",
+            "Tipo de pesquisa:",
+            ["Texto", "Comprimento mínimo"],
+            0,
+            False
+        )
+        if not ok:
+            return
+
+        results = []
+        if option == "Texto":
+            text, ok = QInputDialog.getText(self, "Pesquisar", "Digite o texto:")
+            if not ok or not text:
+                return
+            results = [e for e in self.password_history if text in e['senha']]
+        else:
+            length, ok = QInputDialog.getInt(self, "Filtrar", "Comprimento mínimo:", 1, 1)
+            if not ok:
+                return
+            results = [e for e in self.password_history if e['comprimento'] >= length]
+
+        if not results:
+            QMessageBox.information(self, "Resultado", "Nenhuma senha encontrada.")
+            return
+
+        msg = "Resultados:\n\n"
+        for e in reversed(results):
+            msg += f"[{e['timestamp'].strftime('%H:%M:%S')}] {e['senha']} ({e['comprimento']} caracteres)\n"
+
+        QMessageBox.information(self, "Resultado", msg)
+
+    def show_qr_code(self):
+        """Exibe um QR Code com a senha atual"""
+        if not self.password_field.text():
+            QMessageBox.warning(self, "Aviso", "Gere uma senha primeiro!")
+            return
+
+        img = qrcode.make(self.password_field.text())
+        buffer = io.BytesIO()
+        img.save(buffer, format='PNG')
+        pixmap = QPixmap()
+        pixmap.loadFromData(buffer.getvalue(), 'PNG')
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("QR Code")
+        vbox = QVBoxLayout(dialog)
+        label = QLabel()
+        label.setPixmap(pixmap)
+        vbox.addWidget(label)
+        dialog.exec_()
 
     def toggle_theme(self):
         """Alterna entre tema claro e escuro"""
