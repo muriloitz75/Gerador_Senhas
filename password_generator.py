@@ -277,8 +277,8 @@ class PasswordGenerator(QMainWindow):
         button_layout.addWidget(self.search_btn)
         button_layout.addSpacing(15)
         
-        # Botão de limpar registros antigos
-        self.clean_old_btn = QPushButton("Clean_Old")
+        # Botão de limpar registros
+        self.clean_old_btn = QPushButton("Clean Registry")
         self.clean_old_btn.setStyleSheet(button_style + """
             QPushButton {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
@@ -748,7 +748,7 @@ CONFIGURAÇÕES UTILIZADAS:
         self.password_field.setPlaceholderText("Sua senha aparecerá aqui")
 
     def clean_old_records(self):
-        """Limpa registros com mais de 60 dias da planilha"""
+        """Remove um registro da planilha pelo ID informado"""
         try:
             excel_file = Path('senhas_database.xlsx')
             if not excel_file.exists():
@@ -763,75 +763,56 @@ CONFIGURAÇÕES UTILIZADAS:
                 QMessageBox.critical(self, "Erro", "A planilha está aberta em outro programa. Feche-a e tente novamente.")
                 return
 
+            # Solicita o ID ao usuário
+            record_id, ok = QInputDialog.getInt(
+                self,
+                "Remover Registro",
+                "Digite o ID do registro a ser removido:"
+            )
+
+            if not ok:
+                return
+
+            if record_id < 1 or record_id >= ws.max_row:
+                QMessageBox.warning(self, "Aviso", "ID inválido!")
+                return
+
             # Confirma com o usuário
             resposta = QMessageBox.question(
                 self,
-                "Confirmar Limpeza",
-                "Isso removerá permanentemente todos os registros com mais de 60 dias.\nDeseja continuar?",
+                "Confirmar Remoção",
+                f"Deseja remover o registro de ID {record_id}?",
                 QMessageBox.Yes | QMessageBox.No
             )
 
-            if resposta == QMessageBox.No:
+            if resposta != QMessageBox.Yes:
                 return
 
-            # Data atual para comparação
-            data_atual = datetime.now()
-            registros_removidos = 0
-            linhas_para_remover = []
+            # Remove a linha correspondente (mais 1 por causa do cabeçalho)
+            ws.delete_rows(record_id + 1)
 
-            # Itera pelas linhas (de baixo para cima para não afetar os índices)
-            for row in range(ws.max_row, 1, -1):  # Começa de max_row até 2 (ignora cabeçalho)
-                data_cell = ws[f'D{row}'].value
-                if data_cell:
-                    try:
-                        # Converte a data da planilha (formato dd/mm/yyyy)
-                        data_registro = datetime.strptime(data_cell, "%d/%m/%Y")
-                        dias_diferenca = (data_atual - data_registro).days
-
-                        if dias_diferenca > 60:
-                            linhas_para_remover.append(row)
-                            registros_removidos += 1
-                    except ValueError:
-                        continue  # Ignora linhas com formato de data inválido
-
-            # Remove as linhas marcadas
-            for row in linhas_para_remover:
-                ws.delete_rows(row)
-
-            # Atualiza os IDs após a remoção
+            # Recalcula os IDs
             for idx, row in enumerate(ws.iter_rows(min_row=2), start=1):
-                row[0].value = idx  # Atualiza a coluna ID
+                row[0].value = idx
 
             # Salva as alterações
             wb.save(excel_file)
 
-            # Mostra mensagem de sucesso
-            if registros_removidos > 0:
-                QMessageBox.information(
-                    self,
-                    "Limpeza Concluída",
-                    f"Foram removidos {registros_removidos} registros antigos com sucesso!"
-                )
-            else:
-                QMessageBox.information(
-                    self,
-                    "Limpeza Concluída",
-                    "Não foram encontrados registros com mais de 60 dias."
-                )
+            QMessageBox.information(self, "Sucesso", "Registro removido com sucesso!")
 
             # Tenta abrir a planilha atualizada
             try:
                 if sys.platform == 'win32':
                     os.startfile(excel_file)
                 elif sys.platform == 'darwin':
-                    os.system(f'open "{excel_file}"')
+                    os.system(f'open \"{excel_file}\"')
                 else:
-                    os.system(f'xdg-open "{excel_file}"')
+                    os.system(f'xdg-open \"{excel_file}\"')
             except:
                 pass
 
         except Exception as e:
-            QMessageBox.critical(self, "Erro", f"Erro ao limpar registros: {str(e)}")
+            QMessageBox.critical(self, "Erro", f"Erro ao remover registro: {str(e)}")
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
